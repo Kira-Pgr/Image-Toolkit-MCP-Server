@@ -8,13 +8,13 @@
 
 ## 演示案例
 
-原图
+原图 \
 <img src="https://github.com/user-attachments/assets/a987b4c4-3bba-4a52-a2a8-9f088868d857" width="300"/>
 
-提示词：**给狗添加一件外套**
+提示词：**给狗添加一件外套**  \
 <img src="https://github.com/user-attachments/assets/6de3cdd1-a3b9-422b-95dd-12e2172f6f1d" width="300"/>
 
-提示词：**再给它加一顶帽子**
+提示词：**再给它加一顶帽子**  \
 <img src="https://github.com/user-attachments/assets/047289ca-f3d0-4d16-acf7-09d5af641c68" width="300"/>
 
 ## 功能特性
