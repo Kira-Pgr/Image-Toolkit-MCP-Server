@@ -24,10 +24,10 @@ Usage:
 """
 # Standard library imports
 import base64
-import hashlib
 import os
 import sys
 import tempfile
+import time
 from io import BytesIO
 
 # Third-party imports
@@ -37,8 +37,9 @@ try:
     from google import genai
     from google.genai import types
     from mcp.server.fastmcp import FastMCP
-except ImportError as e:
-    print(f"Error importing required modules: {str(e)}", file=sys.stderr)
+except ImportError as e_import:
+    print(
+        f"Error importing required modules: {str(e_import)}", file=sys.stderr)
     print("Please install required packages: pip install requests pillow google-generativeai")
     sys.exit(1)
 
@@ -79,8 +80,8 @@ def is_safe_image(image_data):
             return False
 
         return True
-    except Exception as e:
-        log_debug(f"Image safety check failed: {str(e)}")
+    except (IOError, SyntaxError, ValueError) as error:
+        log_debug(f"Image safety check failed: {str(error)}")
         return False
 
 
@@ -114,22 +115,21 @@ def download_image(url):
             # Check image safety
             if is_safe_image(image_data):
                 return True, image_data
-            else:
-                return False, "Image failed safety checks"
+
+            return False, "Image failed safety checks"
 
         return False, f"Failed to download image: HTTP {response.status_code}"
 
-    except Exception as e:
-        return False, f"Error downloading image: {str(e)}"
+    except (requests.RequestException, ValueError) as request_error:
+        return False, f"Error downloading image: {str(request_error)}"
 
 
-def upload_to_freeimage(image_data, filename="gemini_generated_image.jpg"):
+def upload_to_freeimage(image_data):
     """
     Upload an image to freeimage.host
     
     Parameters:
     - image_data: Binary image data
-    - filename: Name to use for the uploaded file
     
     Returns:
     - Tuple of (success_boolean, response_data_or_error_message)
@@ -165,8 +165,8 @@ def upload_to_freeimage(image_data, filename="gemini_generated_image.jpg"):
 
         return False, f"HTTP error: {response.status_code}"
 
-    except Exception as e:
-        return False, f"Error uploading to freeimage.host: {str(e)}"
+    except (requests.RequestException, ValueError) as upload_error:
+        return False, f"Error uploading to freeimage.host: {str(upload_error)}"
 
 
 @mcp.resource("generated-image://{image_id}")
@@ -175,12 +175,12 @@ def get_generated_image(image_id: str) -> bytes:
     Get a previously generated image by its ID
     """
     if image_id in generated_files:
-        with open(generated_files[image_id]["path"], "rb") as f:
-            return f.read()
+        with open(generated_files[image_id]["path"], "rb") as file_obj:
+            return file_obj.read()
 
     if image_id in uploaded_files:
-        with open(uploaded_files[image_id]["path"], "rb") as f:
-            return f.read()
+        with open(uploaded_files[image_id]["path"], "rb") as file_obj:
+            return file_obj.read()
 
     return f"Error: Image with ID {image_id} not found"
 
@@ -192,7 +192,8 @@ def get_image_info(image_id: str) -> str:
     """
     if image_id in generated_files:
         info = generated_files[image_id]
-        result = f"Generated image: {info['name']}\nMIME type: {info['mime_type']}\nPrompt: {info['prompt']}"
+        result = (f"Generated image: {info['name']}\nMIME type: {info['mime_type']}\n"
+                  f"Prompt: {info['prompt']}")
 
         # Add external URL if available
         if 'external_url' in info:
@@ -230,6 +231,7 @@ def list_images() -> str:
     return result
 
 
+# pylint: disable=too-many-arguments,too-many-locals,too-many-statements
 @mcp.tool()
 def generate_image_from_url(
     image_url: str,
@@ -327,7 +329,9 @@ def generate_image_from_url(
         )
 
         for chunk in model_stream:
-            if not chunk.candidates or not chunk.candidates[0].content or not chunk.candidates[0].content.parts:
+            if (not chunk.candidates or
+                not chunk.candidates[0].content or
+                    not chunk.candidates[0].content.parts):
                 continue
 
             # Check for inline image data
@@ -345,13 +349,12 @@ def generate_image_from_url(
         # If we found inline image data
         if image_data:
             # Save generated image to a file for history tracking
-            import time
             output_file_name = f"generated_{int(time.time())}.jpg"
             output_file_path = os.path.join(IMAGES_DIR, output_file_name)
 
             # Save to file for history
-            with open(output_file_path, "wb") as f:
-                f.write(image_data)
+            with open(output_file_path, "wb") as file_obj:
+                file_obj.write(image_data)
 
             # Store generated file info
             file_id = f"gen_{len(generated_files)}"
@@ -364,25 +367,25 @@ def generate_image_from_url(
             }
 
             # Upload the generated image to freeimage.host
-            upload_success, upload_result = upload_to_freeimage(
-                image_data, output_file_name)
+            upload_success, upload_result = upload_to_freeimage(image_data)
 
             if upload_success:
                 # Extract the URL from the response
-                image_url = upload_result.get('image', {}).get('url')
+                response_image_url = upload_result.get('image', {}).get('url')
                 thumb_url = upload_result.get(
                     'image', {}).get('thumb', {}).get('url')
                 display_url = upload_result.get('image', {}).get('display_url')
 
                 # Add the URL to the generated file info
-                generated_files[file_id]['external_url'] = image_url
+                generated_files[file_id]['external_url'] = response_image_url
                 generated_files[file_id]['thumb_url'] = thumb_url
                 generated_files[file_id]['display_url'] = display_url
 
-                log_debug(f"Image uploaded to freeimage.host: {image_url}")
+                log_debug(
+                    f"Image uploaded to freeimage.host: {response_image_url}")
 
                 # Just return the URL as a string
-                return image_url
+                return response_image_url
 
             log_debug(f"Failed to upload to freeimage.host: {upload_result}")
             raise ValueError(
@@ -400,10 +403,11 @@ def generate_image_from_url(
         # Clean up temporary file
         try:
             os.unlink(temp_file_path)
-        except:
+        except OSError:
             pass
 
 
+# pylint: disable=too-many-locals
 @mcp.tool()
 def generate_image_from_text(
     prompt: str,
@@ -415,13 +419,13 @@ def generate_image_from_text(
     Generate an image using Gemini based on a text prompt only (no input image required).
     Here's how prompt should be written like, you need to expand on the details:
     - "Close-up photograph of a pair of mismatched socks with different patterns, 
-    on a dark blue velvet wooden background."
+      on a dark blue velvet wooden background."
     - "Dreamy pastel landscape, soft lines, gentle colors, fluffy clouds, rainbow mountains, 
-    minimalist"
+      minimalist"
     - "Group of aliens visiting a farmer's market, trying to understand human food culture. 
-    Lots of fresh fruits and vegetables everywhere"
+      Lots of fresh fruits and vegetables everywhere"
     - "Renaissance vampire king, flower-studded hat, flared nostrils, pink hue, soft gaze, 
-    portrait, candid, quarter-turn"
+      portrait, candid, quarter-turn"
     The image will be uploaded to freeimage.host and can be embedded in markdown 
     using ![image](url) format.
     Use this tool when you need to create a completely new image from a text description.
@@ -481,7 +485,9 @@ def generate_image_from_text(
         )
 
         for chunk in model_stream:
-            if not chunk.candidates or not chunk.candidates[0].content or not chunk.candidates[0].content.parts:
+            if (not chunk.candidates or
+                not chunk.candidates[0].content or
+                    not chunk.candidates[0].content.parts):
                 continue
 
             # Check for inline image data
@@ -499,13 +505,12 @@ def generate_image_from_text(
         # If we found inline image data
         if image_data:
             # Save generated image to a file for history tracking
-            import time
             output_file_name = f"generated_{int(time.time())}.jpg"
             output_file_path = os.path.join(IMAGES_DIR, output_file_name)
 
             # Save to file for history
-            with open(output_file_path, "wb") as f:
-                f.write(image_data)
+            with open(output_file_path, "wb") as file_obj:
+                file_obj.write(image_data)
 
             # Store generated file info
             file_id = f"gen_{len(generated_files)}"
@@ -517,25 +522,25 @@ def generate_image_from_text(
             }
 
             # Upload the generated image to freeimage.host
-            upload_success, upload_result = upload_to_freeimage(
-                image_data, output_file_name)
+            upload_success, upload_result = upload_to_freeimage(image_data)
 
             if upload_success:
                 # Extract the URL from the response
-                image_url = upload_result.get('image', {}).get('url')
+                response_image_url = upload_result.get('image', {}).get('url')
                 thumb_url = upload_result.get(
                     'image', {}).get('thumb', {}).get('url')
                 display_url = upload_result.get('image', {}).get('display_url')
 
                 # Add the URL to the generated file info
-                generated_files[file_id]['external_url'] = image_url
+                generated_files[file_id]['external_url'] = response_image_url
                 generated_files[file_id]['thumb_url'] = thumb_url
                 generated_files[file_id]['display_url'] = display_url
 
-                log_debug(f"Image uploaded to freeimage.host: {image_url}")
+                log_debug(
+                    f"Image uploaded to freeimage.host: {response_image_url}")
 
                 # Just return the URL as a string
-                return image_url
+                return response_image_url
 
             log_debug(f"Failed to upload to freeimage.host: {upload_result}")
             raise ValueError(
@@ -547,13 +552,15 @@ def generate_image_from_text(
 
         # If we reach here, no valid image was obtained
         raise ValueError(
-            "No image data returned from Gemini. Please try a different prompt.") from None
+            "No image data returned from Gemini. Please try a different prompt.")
 
-    except Exception as e:
-        log_debug(f"Error in generate_image_from_text: {str(e)}")
-        raise ValueError(f"Failed to generate image: {str(e)}") from e
+    except ValueError as val_error:
+        log_debug(f"Error in generate_image_from_text: {str(val_error)}")
+        raise ValueError(
+            f"Failed to generate image: {str(val_error)}") from val_error
 
 
+# pylint: disable=too-many-locals
 @mcp.tool()
 def remove_background(
     image_url: str,
@@ -561,7 +568,8 @@ def remove_background(
 ) -> str:
     """
     Remove the background from an image using the remove.bg API.
-    The processed image will be uploaded to freeimage.host and can be embedded in markdown using ![image](url) format.
+    The processed image will be uploaded to freeimage.host and can be embedded in markdown 
+    using ![image](url) format.
     You must provide the image url in markdown format in your response.
     
     Parameters:
@@ -588,10 +596,11 @@ def remove_background(
             files={'image_file': image_data},
             data={'size': size},
             headers={'X-Api-Key': api_key},
+            timeout=30
         )
 
         # Check if request was successful
-        if response.status_code != requests.codes.ok:
+        if response.status_code != 200:
             raise ValueError(
                 f"Remove.bg API error: {response.status_code} - {response.text}")
 
@@ -599,13 +608,12 @@ def remove_background(
         processed_image_data = response.content
 
         # Save processed image to a file for history tracking
-        import time
         output_file_name = f"no_bg_{int(time.time())}.png"
         output_file_path = os.path.join(IMAGES_DIR, output_file_name)
 
         # Save to file for history
-        with open(output_file_path, "wb") as f:
-            f.write(processed_image_data)
+        with open(output_file_path, "wb") as file_obj:
+            file_obj.write(processed_image_data)
 
         # Store generated file info
         file_id = f"gen_{len(generated_files)}"
@@ -619,7 +627,7 @@ def remove_background(
 
         # Upload the processed image to freeimage.host
         upload_success, upload_result = upload_to_freeimage(
-            processed_image_data, output_file_name)
+            processed_image_data)
 
         if upload_success:
             # Extract the URL from the response
@@ -643,6 +651,7 @@ def remove_background(
         raise ValueError(
             f"Failed to upload image to freeimage.host: {upload_result}")
 
-    except Exception as e:
-        log_debug(f"Error in remove_background: {str(e)}")
-        raise ValueError(f"Failed to remove background: {str(e)}") from e
+    except (ValueError, requests.RequestException) as bg_error:
+        log_debug(f"Error in remove_background: {str(bg_error)}")
+        raise ValueError(
+            f"Failed to remove background: {str(bg_error)}") from bg_error
