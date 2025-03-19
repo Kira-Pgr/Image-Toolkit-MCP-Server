@@ -1,8 +1,10 @@
+#!/usr/bin/env python3
 # server.py
 """
 PromptShopMCP
 
-A MCP server that allows you to edit photos using simple text commands. Transform images like a professional designer by just describing what you want in natural language.
+A MCP server that allows you to edit photos using simple text commands. Transform images like a 
+professional designer by just describing what you want in natural language.
 
 Features:
 - Image generation from text prompts using Google's Gemini models
@@ -20,18 +22,25 @@ Usage:
 2. Run the server using FastMCP
 3. Use the provided tools to generate and process images
 """
-from mcp.server.fastmcp import FastMCP
+# Standard library imports
 import base64
-import os
-import tempfile
-import requests
-from io import BytesIO
-from PIL import Image
 import hashlib
-from google import genai
-from google.genai import types
-from mcp.server.fastmcp import Image as MCPImage
+import os
 import sys
+import tempfile
+from io import BytesIO
+
+# Third-party imports
+try:
+    import requests
+    from PIL import Image
+    from google import genai
+    from google.genai import types
+    from mcp.server.fastmcp import FastMCP
+except ImportError as e:
+    print(f"Error importing required modules: {str(e)}", file=sys.stderr)
+    print("Please install required packages: pip install requests pillow google-generativeai")
+    sys.exit(1)
 
 # Create an MCP server
 mcp = FastMCP("PromptShopMCP")
@@ -45,9 +54,8 @@ uploaded_files = {}
 generated_files = {}
 
 # Helper function for logging to stderr (won't interfere with JSON RPC)
-
-
 def log_debug(message):
+    """Log debug messages to stderr"""
     print(message, file=sys.stderr, flush=True)
 
 
@@ -69,14 +77,6 @@ def is_safe_image(image_data):
         # Check file size (prevent excessively large images)
         if len(image_data) > 10 * 1024 * 1024:  # 10MB limit
             return False
-
-        # Calculate image hash for potential blacklist checking
-        # (Could be expanded to check against known unsafe image hashes)
-        image_hash = hashlib.md5(image_data).hexdigest()
-
-        # Additional checks could be added here
-        # - AI-based content moderation
-        # - More sophisticated image analysis
 
         return True
     except Exception as e:
@@ -116,8 +116,8 @@ def download_image(url):
                 return True, image_data
             else:
                 return False, "Image failed safety checks"
-        else:
-            return False, f"Failed to download image: HTTP {response.status_code}"
+
+        return False, f"Failed to download image: HTTP {response.status_code}"
 
     except Exception as e:
         return False, f"Error downloading image: {str(e)}"
@@ -160,10 +160,10 @@ def upload_to_freeimage(image_data, filename="gemini_generated_image.jpg"):
             response_data = response.json()
             if response_data.get('status_code') == 200:
                 return True, response_data
-            else:
-                return False, f"API error: {response_data.get('status_txt', 'Unknown error')}"
-        else:
-            return False, f"HTTP error: {response.status_code}"
+
+            return False, f"API error: {response_data.get('status_txt', 'Unknown error')}"
+
+        return False, f"HTTP error: {response.status_code}"
 
     except Exception as e:
         return False, f"Error uploading to freeimage.host: {str(e)}"
@@ -177,11 +177,12 @@ def get_generated_image(image_id: str) -> bytes:
     if image_id in generated_files:
         with open(generated_files[image_id]["path"], "rb") as f:
             return f.read()
-    elif image_id in uploaded_files:
+
+    if image_id in uploaded_files:
         with open(uploaded_files[image_id]["path"], "rb") as f:
             return f.read()
-    else:
-        return f"Error: Image with ID {image_id} not found"
+
+    return f"Error: Image with ID {image_id} not found"
 
 
 @mcp.resource("image-info://{image_id}")
@@ -202,11 +203,12 @@ def get_image_info(image_id: str) -> str:
             result += f"\nThumbnail URL: {info['thumb_url']}"
 
         return result
-    elif image_id in uploaded_files:
+
+    if image_id in uploaded_files:
         info = uploaded_files[image_id]
         return f"Uploaded image: {info['name']}\nMIME type: {info['mime_type']}"
-    else:
-        return f"Error: Image with ID {image_id} not found"
+
+    return f"Error: Image with ID {image_id} not found"
 
 
 @mcp.resource("list-images://")
@@ -238,14 +240,19 @@ def generate_image_from_url(
     top_k: int = 40
 ) -> str:
     """
-    Download an image from URL and use Gemini to modify it based on prompt, returning only the image URL.
-    The image will be uploaded to freeimage.host and can be embedded in markdown using ![image](url) format.
+    Download an image from URL and use Gemini to modify it based on prompt, 
+    returning only the image URL.
+    The image will be uploaded to freeimage.host and can be embedded in markdown 
+    using ![image](url) format.
     Use this tool to edit images.
-    We will give you an image and a url, use the url for further image editing. You must provide the image url in markdown format in the response.
+    We will give you an image and a url, use the url for further image editing. 
+    You must provide the image url in markdown format in the response.
     
     Parameters:
     - image_url: URL of the image to download and modify
-    - prompt: Text instruction for how to modify the image, this prompt should be simple and concise, like "add sth to sth" or "remove sth" or "change sth to sth"
+    - prompt: Text instruction for how to modify the image, 
+      this prompt should be simple and concise, like "add sth to sth" or "remove sth" 
+      or "change sth to sth", etc.
     - mime_type: MIME type of the image (default: image/jpeg)
     - temperature: Creativity parameter (0.0-1.0)
     - top_p: Token selection parameter (0.0-1.0)
@@ -313,22 +320,26 @@ def generate_image_from_url(
         text_response = ""
 
         # Process the streamed response
-        for chunk in client.models.generate_content_stream(
+        model_stream = client.models.generate_content_stream(
             model="gemini-2.0-flash-exp",
             contents=contents,
             config=generate_content_config,
-        ):
+        )
+
+        for chunk in model_stream:
             if not chunk.candidates or not chunk.candidates[0].content or not chunk.candidates[0].content.parts:
                 continue
 
             # Check for inline image data
-            if hasattr(chunk.candidates[0].content.parts[0], 'inline_data') and chunk.candidates[0].content.parts[0].inline_data:
-                image_data = chunk.candidates[0].content.parts[0].inline_data.data
-                response_mime_type = chunk.candidates[0].content.parts[0].inline_data.mime_type
+            part = chunk.candidates[0].content.parts[0]
+            if hasattr(part, 'inline_data') and part.inline_data:
+                image_data = part.inline_data.data
+                response_mime_type = part.inline_data.mime_type
                 log_debug(f"Received inline image data: {response_mime_type}")
                 break  # Once we have the image, we can stop processing
+
             # Accumulate text response
-            elif hasattr(chunk, 'text') and chunk.text:
+            if hasattr(chunk, 'text') and chunk.text:
                 text_response += chunk.text
 
         # If we found inline image data
@@ -355,7 +366,6 @@ def generate_image_from_url(
             # Upload the generated image to freeimage.host
             upload_success, upload_result = upload_to_freeimage(
                 image_data, output_file_name)
-            image_url = None
 
             if upload_success:
                 # Extract the URL from the response
@@ -373,11 +383,10 @@ def generate_image_from_url(
 
                 # Just return the URL as a string
                 return image_url
-            else:
-                log_debug(
-                    f"Failed to upload to freeimage.host: {upload_result}")
-                raise ValueError(
-                    f"Failed to upload image to freeimage.host: {upload_result}")
+
+            log_debug(f"Failed to upload to freeimage.host: {upload_result}")
+            raise ValueError(
+                f"Failed to upload image to freeimage.host: {upload_result}")
 
         # If no inline image found, but we have text response, log for debugging
         if text_response:
@@ -405,11 +414,16 @@ def generate_image_from_text(
     """
     Generate an image using Gemini based on a text prompt only (no input image required).
     Here's how prompt should be written like, you need to expand on the details:
-    - "Close-up photograph of a pair of mismatched socks with different patterns, on a dark blue velvet wooden background."
-    - "Dreamy pastel landscape, soft lines, gentle colors, fluffy clouds, rainbow mountains, minimalist"
-    - "Group of aliens visiting a farmer's market, trying to understand human food culture. Lots of fresh fruits and vegetables everywhere"
-    - "Renaissance vampire king, flower-studded hat, flared nostrils, pink hue, soft gaze, portrait, candid, quarter-turn"
-    The image will be uploaded to freeimage.host and can be embedded in markdown using ![image](url) format.
+    - "Close-up photograph of a pair of mismatched socks with different patterns, 
+    on a dark blue velvet wooden background."
+    - "Dreamy pastel landscape, soft lines, gentle colors, fluffy clouds, rainbow mountains, 
+    minimalist"
+    - "Group of aliens visiting a farmer's market, trying to understand human food culture. 
+    Lots of fresh fruits and vegetables everywhere"
+    - "Renaissance vampire king, flower-studded hat, flared nostrils, pink hue, soft gaze, 
+    portrait, candid, quarter-turn"
+    The image will be uploaded to freeimage.host and can be embedded in markdown 
+    using ![image](url) format.
     Use this tool when you need to create a completely new image from a text description.
     You must provide the image url in markdown format in your response.
     
@@ -460,22 +474,26 @@ def generate_image_from_text(
         text_response = ""
 
         # Process the streamed response
-        for chunk in client.models.generate_content_stream(
+        model_stream = client.models.generate_content_stream(
             model="gemini-2.0-flash-exp",
             contents=contents,
             config=generate_content_config,
-        ):
+        )
+
+        for chunk in model_stream:
             if not chunk.candidates or not chunk.candidates[0].content or not chunk.candidates[0].content.parts:
                 continue
 
             # Check for inline image data
-            if hasattr(chunk.candidates[0].content.parts[0], 'inline_data') and chunk.candidates[0].content.parts[0].inline_data:
-                image_data = chunk.candidates[0].content.parts[0].inline_data.data
-                response_mime_type = chunk.candidates[0].content.parts[0].inline_data.mime_type
+            part = chunk.candidates[0].content.parts[0]
+            if hasattr(part, 'inline_data') and part.inline_data:
+                image_data = part.inline_data.data
+                response_mime_type = part.inline_data.mime_type
                 log_debug(f"Received inline image data: {response_mime_type}")
                 break  # Once we have the image, we can stop processing
+
             # Accumulate text response
-            elif hasattr(chunk, 'text') and chunk.text:
+            if hasattr(chunk, 'text') and chunk.text:
                 text_response += chunk.text
 
         # If we found inline image data
@@ -518,11 +536,10 @@ def generate_image_from_text(
 
                 # Just return the URL as a string
                 return image_url
-            else:
-                log_debug(
-                    f"Failed to upload to freeimage.host: {upload_result}")
-                raise ValueError(
-                    f"Failed to upload image to freeimage.host: {upload_result}")
+
+            log_debug(f"Failed to upload to freeimage.host: {upload_result}")
+            raise ValueError(
+                f"Failed to upload image to freeimage.host: {upload_result}")
 
         # If no inline image found, but we have text response, log for debugging
         if text_response:
@@ -530,11 +547,11 @@ def generate_image_from_text(
 
         # If we reach here, no valid image was obtained
         raise ValueError(
-            "No image data returned from Gemini. Please try a different prompt.")
+            "No image data returned from Gemini. Please try a different prompt.") from None
 
     except Exception as e:
         log_debug(f"Error in generate_image_from_text: {str(e)}")
-        raise ValueError(f"Failed to generate image: {str(e)}")
+        raise ValueError(f"Failed to generate image: {str(e)}") from e
 
 
 @mcp.tool()
@@ -621,11 +638,11 @@ def remove_background(
 
             # Just return the URL as a string
             return result_url
-        else:
-            log_debug(f"Failed to upload to freeimage.host: {upload_result}")
-            raise ValueError(
-                f"Failed to upload image to freeimage.host: {upload_result}")
+
+        log_debug(f"Failed to upload to freeimage.host: {upload_result}")
+        raise ValueError(
+            f"Failed to upload image to freeimage.host: {upload_result}")
 
     except Exception as e:
         log_debug(f"Error in remove_background: {str(e)}")
-        raise ValueError(f"Failed to remove background: {str(e)}")
+        raise ValueError(f"Failed to remove background: {str(e)}") from e
